@@ -1,12 +1,7 @@
 """
 Gerador de Modelo de Frete
-Preencha os 6 parâmetros estruturais e baixe o Excel.
-Todos os demais dados (preços, taxas, PL, etc.) são editados direto no Excel.
-
-Lógica de fim de semana inteiramente em fórmulas Excel:
-  - WEEKDAY($D,2)>5 → zeros em E/F/G/H/J/K/L/N/O/P
-  - WORKDAY() → calcula Dt e Dv nas colunas auxiliares AQ/AR/AS/AT
-  - SUMIF(AQ,$D,E) → agrega 2º desembolso e levantamento por data
+Informe o número de dias, trânsito e os 3 prazos do importador.
+Todos os outros parâmetros são editados direto no Excel (Dashboard).
 """
 
 import io
@@ -15,6 +10,7 @@ import streamlit as st
 from openpyxl import load_workbook
 from openpyxl.cell import MergedCell
 from openpyxl.styles import PatternFill
+from openpyxl.utils import get_column_letter
 
 st.set_page_config(page_title="Gerador — Modelo de Frete", page_icon="🚛")
 st.title("🚛 Gerador — Modelo de Frete")
@@ -23,14 +19,13 @@ st.divider()
 col1, col2 = st.columns(2)
 
 with col1:
-    n_dias   = st.number_input("Número de dias", min_value=50, max_value=1800, value=395, step=10)
+    n_dias   = st.number_input("Número de dias", min_value=50, max_value=1800, value=360, step=10)
     transito = st.number_input("Dias de trânsito (corridos)", min_value=1, max_value=60, value=5, step=1)
-    pct_ant  = st.number_input("% antecipado no carregamento (D0)", min_value=1, max_value=99, value=80, step=5) / 100
 
 with col2:
-    d1 = st.number_input("Prazo importador cart. 1 (dias corridos)", min_value=1, max_value=365, value=10, step=1)
-    d2 = st.number_input("Prazo importador cart. 2 (dias corridos)", min_value=1, max_value=365, value=15, step=1)
-    d3 = st.number_input("Prazo importador cart. 3 (dias corridos)", min_value=1, max_value=365, value=20, step=1)
+    d1 = st.number_input("Prazo importador cart. 1 (dias)", min_value=1, max_value=365, value=10, step=1)
+    d2 = st.number_input("Prazo importador cart. 2 (dias)", min_value=1, max_value=365, value=12, step=1)
+    d3 = st.number_input("Prazo importador cart. 3 (dias)", min_value=1, max_value=365, value=14, step=1)
     if not (d1 <= d2 <= d3):
         st.warning("Os prazos devem estar em ordem crescente (d1 ≤ d2 ≤ d3).")
 
@@ -38,23 +33,23 @@ st.divider()
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# GERADOR EXCEL
+# GERADOR
 # ════════════════════════════════════════════════════════════════════════════
 
-def gerar_excel(template_bytes, n_dias, d1, d2, d3, transito, pct_ant):
+def gerar_excel(template_bytes, n_dias, transito, d1, d2, d3):
     N     = n_dias
-    LR    = N + 4          # última linha de dados
-    START = datetime.datetime(2026, 6, 1)  # Segunda-feira
+    LR    = N + 4
+    START = datetime.datetime(2026, 6, 1)  # segunda-feira
 
-    # ── ORIG: último dia de originação (Python computa, Excel usa via I7) ─
     def is_wd(n):
-        return (n - 1) % 7 <= 4  # 0=seg..4=sex, 5=sáb, 6=dom
+        return (n - 1) % 7 <= 4
 
     def next_wd(n):
         while not is_wd(n):
             n += 1
         return n
 
+    # ── ORIG: último dia útil em que op ainda fecha dentro de N ────────────
     ORIG = 0
     for n0 in range(1, N + 1):
         if not is_wd(n0):
@@ -82,188 +77,243 @@ def gerar_excel(template_bytes, n_dias, d1, d2, d3, transito, pct_ant):
             for col in range(1, ws.max_column + 1):
                 sc(ws, r, col, None)
 
-    # ── Dashboard ─────────────────────────────────────────────────────────
-    ws_d["H5"].value  = "% Antecipado D0"
-    ws_d["I5"].value  = pct_ant
-    ws_d["H6"].value  = "Trânsito (dias corr.)"
-    ws_d["I6"].value  = transito
-    ws_d["I6"].number_format = "0"       # número inteiro, não contábil
-    ws_d["H7"].value  = "Último dia orig."
-    ws_d["I7"].value  = ORIG        # referenciado por E/I/M via $C<=I7
-    ws_d["H9"].value  = f"% cart. {d1}d"
-    ws_d["H10"].value = f"% cart. {d2}d"
-    ws_d["H11"].value = f"% cart. {d3}d"
-    ws_d["K9"].value  = d1          # referenciado por AR (Dv1)
-    ws_d["K10"].value = d2          # referenciado por AS (Dv2)
-    ws_d["K11"].value = d3          # referenciado por AT (Dv3)
-    ws_d["L9"].value  = "dias prazo"
-    ws_d["L10"].value = "dias prazo"
-    ws_d["L11"].value = "dias prazo"
-    ws_d["E5"].value  = f"=Fundo!AD5+Fundo!AD{LR}"
-    ws_d["E6"].value  = f"=Fundo!AJ5+Fundo!AJ{LR}"
-    ws_d["E7"].value  = f"=Fundo!AN5+Fundo!AN{LR}"
-    ws_d["C23"].value = f"=Fundo!U{LR}/Dashboard!D14"
+    # ── Dashboard ──────────────────────────────────────────────────────────
+    ws_d["I7"].value  = transito
+    ws_d["I8"].value  = ORIG
+    ws_d["L14"].value = d1
+    ws_d["L15"].value = d2
+    ws_d["L16"].value = d3
 
-    # ── Fundo: cabeçalhos ─────────────────────────────────────────────────
+    # Refs dinâmicas à última linha
+    ws_d["E5"].value  = f"=SUM(Fundo!AG5:AG{LR})"
+    ws_d["E6"].value  = f"=SUM(Fundo!AM5:AM{LR})"
+    ws_d["E7"].value  = f"=SUM(Fundo!AQ5:AQ{LR})"
+    ws_d["C23"].value = f"=Fundo!X{LR}/Dashboard!D14"
+
+    # ── Fundo: cabeçalhos ──────────────────────────────────────────────────
     ws_f["E2"].value  = f"Carteira {d1}d"
-    ws_f["I2"].value  = f"Carteira {d2}d"
-    ws_f["M2"].value  = f"Carteira {d3}d"
-    ws_f["F3"].value  = "1º Desemb. (-)"
-    ws_f["G3"].value  = "2º Desemb. (-)"  # nova posição
-    ws_f["H3"].value  = "Levantamento"     # nova posição
-    ws_f["J3"].value  = "1º Desemb. (-)"
-    ws_f["K3"].value  = "2º Desemb. (-)"
-    ws_f["L3"].value  = "Levantamento"
-    ws_f["N3"].value  = "1º Desemb. (-)"
-    ws_f["O3"].value  = "2º Desemb. (-)"
-    ws_f["P3"].value  = "Levantamento"
-    ws_f["R3"].value  = "Total Desemb. (-)"
-    ws_f["S3"].value  = "Levantamento"
-    ws_f["AQ3"].value = "Dt chegada"
-    ws_f["AR3"].value = "Dv1 pgto"
-    ws_f["AS3"].value = "Dv2 pgto"
-    ws_f["AT3"].value = "Dv3 pgto"
+    ws_f["J2"].value  = f"Carteira {d2}d"
+    ws_f["O2"].value  = f"Carteira {d3}d"
 
-    # ── Fundo: linha 4 e IRRs ─────────────────────────────────────────────
-    ws_f["U4"].value  = "=Z5+AF5+AL5"
-    ws_f["X2"].value  = f"=IRR(X5:X{LR},0.001)"
-    ws_f["AD2"].value = f"=IRR(AD5:AD{LR},0.001)"
-    ws_f["AJ2"].value = f"=IRR(AJ5:AJ{LR},0.001)"
-    ws_f["AN2"].value = f"=IRR(AN5:AN{LR},0.001)"
+    # IRRs
+    ws_f["AA2"].value = f"=IRR(AA5:AA{LR},0.001)"
+    ws_f["AG2"].value = f"=IRR(AG5:AG{LR},0.001)"
+    ws_f["AM2"].value = f"=IRR(AM5:AM{LR},0.001)"
+    ws_f["AQ2"].value = f"=IRR(AQ5:AQ{LR},0.001)"
 
+    # Linha 4 (init)
+    ws_f["X4"].value  = "=AC5+AI5+AO5"
+    ws_f["Z4"].value  = "=X4"
+    ws_f["AC4"].value = "=Dashboard!D10"
+    ws_f["AI4"].value = "=Dashboard!D11"
+    ws_f["AO4"].value = "=Dashboard!D12"
+
+    # ── Limpar dados antigos ───────────────────────────────────────────────
     clear_rows(ws_f, 5)
     clear_rows(ws_c, 5)
 
     yellow    = PatternFill(patternType="solid", fgColor="FFFFFFCC")
     light_red = PatternFill(patternType="solid", fgColor="FFFFCCCC")
 
-    # Atalhos de range para SUMIF (absolutos, usados em todas as linhas)
-    rng_aq = f"$AQ$5:$AQ${LR}"
-    rng_ar = f"$AR$5:$AR${LR}"
-    rng_as = f"$AS$5:$AS${LR}"
+    # Atalhos de range
     rng_at = f"$AT$5:$AT${LR}"
+    rng_au = f"$AU$5:$AU${LR}"
+    rng_av = f"$AV$5:$AV${LR}"
+    rng_aw = f"$AW$5:$AW${LR}"
     rng_e  = f"$E$5:$E${LR}"
-    rng_i  = f"$I$5:$I${LR}"
-    rng_m  = f"$M$5:$M${LR}"
+    rng_j  = f"$J$5:$J${LR}"
+    rng_o  = f"$O$5:$O${LR}"
 
+    # ── Fundo: linhas 5..LR ────────────────────────────────────────────────
     for n in range(1, N + 1):
-        r  = n + 4
-        pr = r - 1
+        r     = n + 4
+        pr    = r - 1
         first = (n == 1)
         last  = (n == N)
-        wd    = is_wd(n)   # para coloração — lógica de negócio fica no Excel
+        wd    = is_wd(n)
 
-        # ── B: Benchmark ──────────────────────────────────────────────────
-        sc(ws_f,r,2, "=Dashboard!D14" if first
-                     else f"=B{pr}*(((1+Dashboard!$C$20)^(1/30)))")
+        # B: Benchmark (base 252)
+        sc(ws_f,r,2,  "=Dashboard!D14" if first
+                      else f"=IF(WEEKDAY($D{r},2)>5,B{pr},B{pr}*((1+Dashboard!$D$20)^(1/252)))")
 
-        # ── C / D: contador e data ────────────────────────────────────────
+        # C: contador, D: data
         sc(ws_f,r,3, n)
         sc(ws_f,r,4, START if first else f"=D{pr}+1")
 
-        # ── E / I / M: originações — Excel checa fim de semana e ORIG ────
-        e_f = f"=IF(AND(WEEKDAY($D{r},2)<=5,C{r}<=Dashboard!$I$7),Dashboard!$I$8*Dashboard!$I$9,0)"
-        i_f = f"=IF(AND(WEEKDAY($D{r},2)<=5,C{r}<=Dashboard!$I$7),Dashboard!$I$8*Dashboard!$I$10,0)"
-        m_f = f"=IF(AND(WEEKDAY($D{r},2)<=5,C{r}<=Dashboard!$I$7),Dashboard!$I$8*Dashboard!$I$11,0)"
-        sc(ws_f,r,5,  e_f)
-        sc(ws_f,r,9,  i_f)
-        sc(ws_f,r,13, m_f)
+        # ── Originações E (5), J (10), O (15) ──────────────────────────────
+        for col, dist_col in [(5, "$I$14"), (10, "$I$15"), (15, "$I$16")]:
+            sc(ws_f,r,col,
+               f"=IF(AND(WEEKDAY($D{r},2)<=5,C{r}<=Dashboard!$I$8),Dashboard!$I$13*Dashboard!{dist_col},0)")
 
-        # ── F / J / N: 1º desembolso (80%) ───────────────────────────────
-        sc(ws_f,r,6,  f"=IF(WEEKDAY($D{r},2)>5,0,E{r}*Dashboard!$I$3*Dashboard!$I$5)")
-        sc(ws_f,r,10, f"=IF(WEEKDAY($D{r},2)>5,0,I{r}*Dashboard!$I$3*Dashboard!$I$5)")
-        sc(ws_f,r,14, f"=IF(WEEKDAY($D{r},2)>5,0,M{r}*Dashboard!$I$3*Dashboard!$I$5)")
+        # ── 1º Desembolso F (6), K (11), P (16) ────────────────────────────
+        sc(ws_f,r,6,  f"=IF(WEEKDAY($D{r},2)>5,0,E{r}*Dashboard!$J$10*Dashboard!$I$6)")
+        sc(ws_f,r,11, f"=IF(WEEKDAY($D{r},2)>5,0,J{r}*Dashboard!$J$11*Dashboard!$I$6)")
+        sc(ws_f,r,16, f"=IF(WEEKDAY($D{r},2)>5,0,O{r}*Dashboard!$J$12*Dashboard!$I$6)")
 
-        # ── G / K / O: 2º desembolso (20%) — SUMIF sobre Dt (col AQ) ────
-        g2_base = f"*Dashboard!$I$3*(1-Dashboard!$I$5)"
-        sc(ws_f,r,7,  f"=IF(WEEKDAY($D{r},2)>5,0,SUMIF({rng_aq},$D{r},{rng_e}){g2_base})")
-        sc(ws_f,r,11, f"=IF(WEEKDAY($D{r},2)>5,0,SUMIF({rng_aq},$D{r},{rng_i}){g2_base})")
-        sc(ws_f,r,15, f"=IF(WEEKDAY($D{r},2)>5,0,SUMIF({rng_aq},$D{r},{rng_m}){g2_base})")
+        # ── 2º Desembolso G (7), L (12), Q (17) ────────────────────────────
+        sc(ws_f,r,7,  f"=IF(WEEKDAY($D{r},2)>5,0,SUMIF({rng_at},$D{r},{rng_e})*Dashboard!$J$10*(1-Dashboard!$I$6))")
+        sc(ws_f,r,12, f"=IF(WEEKDAY($D{r},2)>5,0,SUMIF({rng_at},$D{r},{rng_j})*Dashboard!$J$11*(1-Dashboard!$I$6))")
+        sc(ws_f,r,17, f"=IF(WEEKDAY($D{r},2)>5,0,SUMIF({rng_at},$D{r},{rng_o})*Dashboard!$J$12*(1-Dashboard!$I$6))")
 
-        # ── H / L / P: levantamento — SUMIF sobre Dv (cols AR/AS/AT) ────
-        sc(ws_f,r,8,  f"=IF(WEEKDAY($D{r},2)>5,0,SUMIF({rng_ar},$D{r},{rng_e})*Dashboard!$I$4)")
-        sc(ws_f,r,12, f"=IF(WEEKDAY($D{r},2)>5,0,SUMIF({rng_as},$D{r},{rng_i})*Dashboard!$I$4)")
-        sc(ws_f,r,16, f"=IF(WEEKDAY($D{r},2)>5,0,SUMIF({rng_at},$D{r},{rng_m})*Dashboard!$I$4)")
+        # ── Levantamento H (8), M (13), R (18) ─────────────────────────────
+        sc(ws_f,r,8,  f"=IF(WEEKDAY($D{r},2)>5,0,SUMIF({rng_au},$D{r},{rng_e})*Dashboard!$I$4)")
+        sc(ws_f,r,13, f"=IF(WEEKDAY($D{r},2)>5,0,SUMIF({rng_av},$D{r},{rng_j})*Dashboard!$I$4)")
+        sc(ws_f,r,18, f"=IF(WEEKDAY($D{r},2)>5,0,SUMIF({rng_aw},$D{r},{rng_o})*Dashboard!$I$4)")
 
-        # ── Q / R / S ─────────────────────────────────────────────────────
-        sc(ws_f,r,17, f"=E{r}+I{r}+M{r}")
-        sc(ws_f,r,18, f"=F{r}+G{r}+J{r}+K{r}+N{r}+O{r}")   # total desembolso
-        sc(ws_f,r,19, f"=H{r}+L{r}+P{r}")                   # total levantamento
+        # ── T (20): n total; U (21): Total Desemb; V (22): Levantamento ────
+        sc(ws_f,r,20, f"=E{r}+J{r}+O{r}")
+        sc(ws_f,r,21, f"=F{r}+G{r}+K{r}+L{r}+P{r}+Q{r}")
+        sc(ws_f,r,22, f"=H{r}+M{r}+R{r}")
 
-        # ── T: P&L ativos (levantamentos – custo de aquisição) ────────────
-        cost = (f"(SUMIF({rng_ar},$D{r},{rng_e})"
-                f"+SUMIF({rng_as},$D{r},{rng_i})"
-                f"+SUMIF({rng_at},$D{r},{rng_m}))*Dashboard!$I$3")
-        sc(ws_f,r,20, f"=S{r}-{cost}")
+        # ── W (23): P&L Ativos ─────────────────────────────────────────────
+        sc(ws_f,r,23, f"=V{r}-(SUMIF({rng_au},$D{r},{rng_e})*Dashboard!$J$10"
+                      f"+SUMIF({rng_av},$D{r},{rng_j})*Dashboard!$J$11"
+                      f"+SUMIF({rng_aw},$D{r},{rng_o})*Dashboard!$J$12)")
 
-        # ── V: rendimento CDI ─────────────────────────────────────────────
-        sc(ws_f,r,22, 0 if first
-                      else f"=U{pr}*(((1+Dashboard!$C$17)^(1/30))-1)")
+        # ── Y (25): Rec LM (CDI sobre caixa, base 252) ─────────────────────
+        sc(ws_f,r,25, 0 if first
+                      else f"=IF(WEEKDAY($D{r},2)>5,0,X{pr}*((1+Dashboard!$D$17)^(1/252)-1))")
 
-        # ── U: caixa ──────────────────────────────────────────────────────
+        # ── X (24): Caixa ──────────────────────────────────────────────────
         if first:
-            sc(ws_f,r,21, f"=U4-R{r}+S{r}+V{r}-Custos!D{r}")
+            sc(ws_f,r,24, f"=X4-U{r}+V{r}+Y{r}-Custos!D{r}")
         elif n == 2:
-            sc(ws_f,r,21, f"=U{pr}-R{r}+S{r}+V{r}-Custos!D{r}"
-                          f"-AB{pr}-AH{pr}-AM{pr}")
+            # Dia 2: integralizações iniciais já estão em X4, só desconta amortizações
+            sc(ws_f,r,24, f"=X{pr}-U{r}+V{r}+Y{r}-Custos!D{r}"
+                          f"-AE{pr}-AK{pr}-AP{pr}")
         else:
-            sc(ws_f,r,21, f"=U{pr}-R{r}+S{r}+V{r}-Custos!D{r}"
-                          f"+Z{pr}+AF{pr}+AL{pr}-AB{pr}-AH{pr}-AM{pr}")
+            sc(ws_f,r,24, f"=X{pr}-U{r}+V{r}+Y{r}-Custos!D{r}"
+                          f"+AC{pr}+AI{pr}+AO{pr}-AE{pr}-AK{pr}-AP{pr}")
 
-        sc(ws_f,r,23, f"=U{r}+R{r}")
-        sc(ws_f,r,24, f"=-R{r}+S{r}-Custos!D{r}")
+        # ── Z (26): PL Fundo = Caixa + Carteira ────────────────────────────
+        sc(ws_f,r,26, f"=X{r}+Carteira!C{r-1}")
 
-        # ── Sênior ────────────────────────────────────────────────────────
-        sc(ws_f,r,26, "=Z4" if first else 0)
-        sc(ws_f,r,27, f"=AC{pr}*(((1+Dashboard!$C$20)^(1/30))-1)")
-        sc(ws_f,r,28, f"=AC{r}" if last else 0)
-        sc(ws_f,r,29, f"=Z{r}" if first else f"=AC{pr}+AA{r}-AB{pr}+Z{r}")
-        sc(ws_f,r,30, f"=-Z{r}+AB{r}")
+        # ── AA (27): Fluxo ─────────────────────────────────────────────────
+        sc(ws_f,r,27, f"=-U{r}+V{r}-Custos!D{r}")
 
-        # ── Mezanino ──────────────────────────────────────────────────────
-        sc(ws_f,r,32, "=AF4" if first else 0)
-        sc(ws_f,r,33, f"=AI{pr}*(((1+Dashboard!$C$21)^(1/30))-1)")
-        sc(ws_f,r,34, f"=AI{r}" if last else 0)
-        sc(ws_f,r,35, f"=AF{r}" if first else f"=AI{pr}+AG{r}-AH{pr}+AF{r}")
-        sc(ws_f,r,36, f"=-AF{r}+AH{r}")
+        # ── SÊNIOR (AC=29, AD=30, AE=31, AF=32, AG=33) ─────────────────────
+        sc(ws_f,r,29, "=AC4" if first else 0)
+        sc(ws_f,r,30, f"=IF(WEEKDAY($D{r},2)>5,0,AF{pr}*((1+Dashboard!$D$20)^(1/252)-1))")
+        sc(ws_f,r,31, f"=AF{r}" if last else 0)
+        sc(ws_f,r,32, f"=AC{r}" if first else f"=AF{pr}+AD{r}-AE{pr}+AC{r}")
+        sc(ws_f,r,33, f"=-AC{r}+AE{r}")
 
-        # ── Júnior ────────────────────────────────────────────────────────
-        sc(ws_f,r,38, "=AL4" if first else 0)
-        sc(ws_f,r,39, f"=U{r}-AB{r}-AH{r}" if last else 0)
-        sc(ws_f,r,40, f"=-AL{r}+AM{r}")
+        # ── MEZANINO (AI=35, AJ=36, AK=37, AL=38, AM=39) ───────────────────
+        sc(ws_f,r,35, "=AI4" if first else 0)
+        sc(ws_f,r,36, f"=IF(WEEKDAY($D{r},2)>5,0,AL{pr}*((1+Dashboard!$D$21)^(1/252)-1))")
+        sc(ws_f,r,37, f"=AL{r}" if last else 0)
+        sc(ws_f,r,38, f"=AI{r}" if first else f"=AL{pr}+AJ{r}-AK{pr}+AI{r}")
+        sc(ws_f,r,39, f"=-AI{r}+AK{r}")
 
-        # ── Colunas auxiliares de datas (AQ/AR/AS/AT) ─────────────────────
-        # AQ: Dt = próximo dia útil após D0 + trânsito (chegada ao porto)
-        sc(ws_f,r,43, f"=IF(E{r}>0,WORKDAY($D{r}+Dashboard!$I$6-1,1),\"\")")
-        # AR/AS/AT: Dv1/2/3 = próximo dia útil após Dt + prazo importador
-        sc(ws_f,r,44, f"=IF(AQ{r}<>\"\",WORKDAY(AQ{r}+Dashboard!$K$9-1,1),\"\")")
-        sc(ws_f,r,45, f"=IF(AQ{r}<>\"\",WORKDAY(AQ{r}+Dashboard!$K$10-1,1),\"\")")
-        sc(ws_f,r,46, f"=IF(AQ{r}<>\"\",WORKDAY(AQ{r}+Dashboard!$K$11-1,1),\"\")")
+        # ── JÚNIOR (AO=41, AP=42, AQ=43) ───────────────────────────────────
+        sc(ws_f,r,41, "=AO4" if first else 0)
+        sc(ws_f,r,42, f"=X{r}-AE{r}-AK{r}" if last else 0)
+        sc(ws_f,r,43, f"=-AO{r}+AP{r}")
 
-        # ── Cores ─────────────────────────────────────────────────────────
+        # ── Datas auxiliares (AT=46, AU=47, AV=48, AW=49) ──────────────────
+        sc(ws_f,r,46, f'=IF(E{r}>0,WORKDAY($D{r}+Dashboard!$I$7-1,1),"")')
+        sc(ws_f,r,47, f'=IF(AT{r}<>"",WORKDAY(AT{r}+Dashboard!$L$14-1,1),"")')
+        sc(ws_f,r,48, f'=IF(AT{r}<>"",WORKDAY(AT{r}+Dashboard!$L$15-1,1),"")')
+        sc(ws_f,r,49, f'=IF(AT{r}<>"",WORKDAY(AT{r}+Dashboard!$L$16-1,1),"")')
+
+        # ── AY (51): Carteira recursiva (para comparação) ──────────────────
+        cost_today = (f"SUMIF({rng_au},$D{r},{rng_e})*Dashboard!$J$10"
+                      f"+SUMIF({rng_av},$D{r},{rng_j})*Dashboard!$J$11"
+                      f"+SUMIF({rng_aw},$D{r},{rng_o})*Dashboard!$J$12")
+        if first:
+            sc(ws_f,r,51, f"=U{r}")
+        else:
+            sc(ws_f,r,51, f"=AY{pr}+U{r}-({cost_today})")
+
+        # ── Cores ──────────────────────────────────────────────────────────
         if not last:
-            for col in [26, 28, 32, 34, 38, 39]:   # amarelo: integr./amort.
+            for col in [29, 31, 35, 37, 41, 42]:   # AC, AE, AI, AK, AO, AP
                 cell = ws_f.cell(r, col)
                 if not isinstance(cell, MergedCell):
                     cell.fill = yellow
 
-        if not wd:                                   # vermelho: fins de semana
-            for col in range(2, 17):
+        if not wd:
+            for col in range(2, 20):   # B até S
                 cell = ws_f.cell(r, col)
                 if not isinstance(cell, MergedCell):
                     cell.fill = light_red
 
-        # ── Custos ────────────────────────────────────────────────────────
+        # ── Custos ─────────────────────────────────────────────────────────
         sc(ws_c,r,2, n)
         sc(ws_c,r,3, START if first else f"=C{pr}+1")
-        sc(ws_c,r,5, "=Dashboard!$J$16/30" if first
-                     else f"=MAX(Dashboard!$J$16,(Dashboard!$I$16*Fundo!W{pr})/360)/30")
-        sc(ws_c,r,6, "=Dashboard!$J$15/30" if first
-                     else f"=MAX(Dashboard!$J$15,(Dashboard!$I$15*Fundo!W{pr})/360)/30")
-        sc(ws_c,r,7, 0 if first else f"=Fundo!R{pr}*Dashboard!$I$14")
-        sc(ws_c,r,8, 0)
-        sc(ws_c,r,9, 10000 if first else None)
+        sc(ws_c,r,5, "=Dashboard!$J$21/30" if first
+                     else f"=MAX(Dashboard!$J$21,(Dashboard!$I$21*Fundo!Z{pr})/360)/30")
+        sc(ws_c,r,6, "=Dashboard!$J$20/30" if first
+                     else f"=MAX(Dashboard!$J$20,(Dashboard!$I$20*Fundo!Z{pr})/360)/30")
+        sc(ws_c,r,7, 0 if first else f"=Fundo!U{pr}*Dashboard!$I$19")
+        sc(ws_c,r,8, f"=MAX(0, (Fundo!Y{r} + MAX(0,Fundo!W{r}) - Fundo!Z{pr}*((1+Dashboard!$I$23)^(1/252)-1)) * Dashboard!$I$22)")
+        sc(ws_c,r,9, "=Dashboard!I24" if first else None)
         sc(ws_c,r,4, f"=E{r}+F{r}+G{r}+H{r}+I{r}")
+
+    # ── Aba Carteira ───────────────────────────────────────────────────────
+    if "Carteira" in wb.sheetnames:
+        del wb["Carteira"]
+    ws_cart = wb.create_sheet("Carteira")
+
+    orig_days = [n for n in range(1, N + 1) if is_wd(n) and n <= ORIG]
+
+    phases = {}
+    for n0 in orig_days:
+        dt  = next_wd(n0 + transito)
+        dv1 = next_wd(dt + d1)
+        dv2 = next_wd(dt + d2)
+        dv3 = next_wd(dt + d3)
+        phases[n0] = (dt, dv1, dv2, dv3)
+
+    ws_cart.cell(1, 1).value = "Dia"
+    ws_cart.cell(1, 2).value = "Data"
+    ws_cart.cell(1, 3).value = "Carteira Total"
+
+    fills_cart = [
+        PatternFill("solid", fgColor="D6E4F0"),
+        PatternFill("solid", fgColor="D5F0D5"),
+        PatternFill("solid", fgColor="FFF2CC"),
+    ]
+    port_qty   = ["E", "J", "O"]
+    port_price = ["$J$10", "$J$11", "$J$12"]
+
+    for i, n0 in enumerate(orig_days):
+        base_col   = 4 + i*3
+        orig_date  = START + datetime.timedelta(days=n0 - 1)
+        dt, dv1, dv2, dv3 = phases[n0]
+        dv_list = [dv1, dv2, dv3]
+
+        ws_cart.cell(1, base_col).value = f"Orig dia {n0} | {orig_date.strftime('%d/%m/%y')}"
+
+        for p in range(3):
+            col  = base_col + p
+            dv_p = dv_list[p]
+
+            for n in range(1, N + 1):
+                row = n + 3
+                if n < n0:
+                    val = 0
+                elif n < dt:
+                    val = f"=Fundo!${port_qty[p]}${n0+4}*Dashboard!{port_price[p]}*Dashboard!$I$6"
+                elif n < dv_p:
+                    val = f"=Fundo!${port_qty[p]}${n0+4}*Dashboard!{port_price[p]}"
+                else:
+                    val = 0
+
+                ws_cart.cell(row, col).value = val
+                if val != 0:
+                    ws_cart.cell(row, col).fill = fills_cart[p]
+
+    # Coluna A (Dia), B (Data), C (Total)
+    n_orig = len(orig_days)
+    last_col_letter = get_column_letter(4 + n_orig*3 - 1) if n_orig > 0 else "C"
+    for n in range(1, N + 1):
+        row = n + 3
+        ws_cart.cell(row, 1).value = n
+        ws_cart.cell(row, 2).value = f"=Fundo!D{n+4}"
+        ws_cart.cell(row, 2).number_format = "DD/MM/YY"
+        if n_orig > 0:
+            ws_cart.cell(row, 3).value = f"=SUM(D{row}:{last_col_letter}{row})"
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -276,14 +326,14 @@ def gerar_excel(template_bytes, n_dias, d1, d2, d3, transito, pct_ant):
 # ════════════════════════════════════════════════════════════════════════════
 
 try:
-    with open("Modelagem_Frete_v5.xlsx", "rb") as f:
+    with open("Modelagem_Frete_v3.xlsx", "rb") as f:
         template_bytes = f.read()
 except FileNotFoundError:
-    st.error("❌ Arquivo `Modelagem_Frete_v5.xlsx` não encontrado no repositório.")
+    st.error("❌ Arquivo `Modelagem_Frete_v3.xlsx` não encontrado no repositório.")
     st.stop()
 
 with st.spinner("Gerando Excel..."):
-    excel_bytes = gerar_excel(template_bytes, n_dias, d1, d2, d3, transito, pct_ant)
+    excel_bytes = gerar_excel(template_bytes, n_dias, transito, d1, d2, d3)
 
 st.download_button(
     label=f"⬇️ Baixar Modelagem_Frete_{n_dias}d.xlsx",
